@@ -383,6 +383,32 @@ import { FFmpeg } from "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.
 import { fetchFile, toBlobURL } from "https://unpkg.com/@ffmpeg/util@0.12.1/dist/esm/index.js";
 
 const CORE_BASE = "https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm";
+const FFMPEG_PKG_BASE = "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm";
+
+// @ffmpeg/ffmpeg spins up its own background Worker to do the work off the
+// main thread. When this whole page is loaded from a CDN (unpkg) rather than
+// bundled, that worker script lives on a different origin than the page
+// (e.g. your GitHub Pages domain), and browsers refuse to construct a Worker
+// from a cross-origin URL. The fix: fetch the worker's source (plus its two
+// tiny internal dependency files), strip their ES-module import/export
+// syntax, concatenate them into one self-contained script, and load that as
+// a same-origin blob: URL instead.
+async function buildFFmpegWorkerBlobURL(){
+  const stripModuleSyntax = (src) => src
+    .replace(/^import\s[\s\S]*?;\s*$/gm, "")
+    .replace(/^export\s+(const|let|var|function|class)\s+/gm, "$1 ")
+    .replace(/^export\s+default\s+/gm, "");
+
+  const [constJs, errorsJs, workerJs] = await Promise.all([
+    fetch(`${FFMPEG_PKG_BASE}/const.js`).then(r => r.text()),
+    fetch(`${FFMPEG_PKG_BASE}/errors.js`).then(r => r.text()),
+    fetch(`${FFMPEG_PKG_BASE}/worker.js`).then(r => r.text()),
+  ]);
+
+  const combined = [constJs, errorsJs, workerJs].map(stripModuleSyntax).join("\n");
+  const blob = new Blob([combined], { type: "text/javascript" });
+  return URL.createObjectURL(blob);
+}
 
 const dropzone = document.getElementById("dropzone");
 const fileInput = document.getElementById("fileInput");
@@ -426,15 +452,19 @@ async function initEngine(){
   });
   setEngineStatus("busy", "Loading engine (first run only)…");
   try {
-    const coreURL = await toBlobURL(`${CORE_BASE}/ffmpeg-core.js`, "text/javascript");
-    const wasmURL = await toBlobURL(`${CORE_BASE}/ffmpeg-core.wasm`, "application/wasm");
-    await ffmpeg.load({ coreURL, wasmURL });
+    const [classWorkerURL, coreURL, wasmURL] = await Promise.all([
+      buildFFmpegWorkerBlobURL(),
+      toBlobURL(`${CORE_BASE}/ffmpeg-core.js`, "text/javascript"),
+      toBlobURL(`${CORE_BASE}/ffmpeg-core.wasm`, "application/wasm"),
+    ]);
+    await ffmpeg.load({ classWorkerURL, coreURL, wasmURL });
     engineReady = true;
     setEngineStatus("ready", "Engine ready");
     updateRunButton();
   } catch (err) {
     console.error(err);
-    setEngineStatus("error", "Engine failed to load — see console / footer note below");
+    const detail = (err && (err.message || err.toString())) || "unknown error";
+    setEngineStatus("error", `Engine failed to load: ${detail}`);
   }
 }
 initEngine();
