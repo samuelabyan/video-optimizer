@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local Video Optimizer</title>
+    <!-- FFmpeg.wasm Single-Threaded Library for Client-Side Processing -->
+    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --text-color: #f8fafc;
+            --text-dim: #94a3b8;
+            --primary: #3b82f6;
+            --primary-hover: #2563eb;
+            --border-color: #334155;
+            --accent: #10b981;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        body { background: var(--bg-color); color: var(--text-color); display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 20px; }
+        .container { width: 100%; max-width: 650px; background: var(--card-bg); border-radius: 12px; padding: 28px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); border: 1px solid var(--border-color); }
+        h1 { font-size: 1.5rem; font-weight: 600; margin-bottom: 6px; text-align: center; }
+        p.subtitle { color: var(--text-dim); text-align: center; font-size: 0.9rem; margin-bottom: 24px; }
+        
+        .drop-zone { border: 2px dashed var(--border-color); border-radius: 8px; padding: 28px; text-align: center; cursor: pointer; transition: all 0.2s; background: rgba(255,255,255,0.02); }
+        .drop-zone:hover, .drop-zone.dragover { border-color: var(--primary); background: rgba(59, 130, 246, 0.05); }
+        .drop-zone p { margin-top: 8px; color: var(--text-dim); font-size: 0.85rem; }
+        .file-info { margin-top: 12px; font-weight: 500; font-size: 0.9rem; color: var(--primary); display: none; text-align: center; word-break: break-all; }
+        
+        .options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 20px 0; }
+        .form-group { display: flex; flex-direction: column; gap: 6px; }
+        label { font-size: 0.85rem; font-weight: 500; color: var(--text-dim); }
+        select { background: #0f172a; border: 1px solid var(--border-color); color: var(--text-color); padding: 10px; border-radius: 6px; outline: none; font-size: 0.9rem; }
+        select:focus { border-color: var(--primary); }
+        
+        .btn { width: 100%; padding: 12px; border: none; border-radius: 6px; background: var(--primary); color: white; font-weight: 600; font-size: 1rem; cursor: pointer; transition: background 0.2s; margin-top: 8px; }
+        .btn:hover { background: var(--primary-hover); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .progress-section { margin-top: 20px; display: none; }
+        .progress-header { display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-dim); margin-bottom: 6px; }
+        .progress-bar-bg { width: 100%; height: 10px; background: #0f172a; border-radius: 5px; overflow: hidden; border: 1px solid var(--border-color); }
+        .progress-bar-fill { width: 0%; height: 100%; background: var(--primary); transition: width 0.2s; }
+
+        .output-section { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border-color); display: none; text-align: center; }
+        .output-section h3 { margin-bottom: 12px; color: var(--accent); }
+        video { width: 100%; max-height: 280px; border-radius: 8px; background: #000; margin-bottom: 12px; }
+        .download-btn { display: inline-block; text-decoration: none; background: var(--accent); color: white; padding: 10px 20px; border-radius: 6px; font-weight: 600; }
+        .download-btn:hover { opacity: 0.9; }
+
+        .size-comparison { margin-top: 12px; font-size: 0.85rem; color: var(--text-dim); line-height: 1.5; }
+        .note { font-size: 0.75rem; color: var(--text-dim); margin-top: 20px; text-align: center; line-height: 1.4; opacity: 0.8; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Local Video Optimizer</h1>
+        <p class="subtitle">Client-Side Compression & Conversion (100% Offline Capable)</p>
+
+        <!-- Drop Zone -->
+        <div class="drop-zone" id="dropZone">
+            <svg width="36" height="36" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color: var(--primary);"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+            <p>Click or drag & drop a video file (.mov, .mp4, .mkv, .avi)</p>
+            <input type="file" id="fileInput" accept="video/*,.mov" style="display: none;">
+        </div>
+        <div class="file-info" id="fileInfo"></div>
+
+        <!-- Optimization Controls -->
+        <div class="options-grid">
+            <div class="form-group">
+                <label for="outFormat">Export Format</label>
+                <select id="outFormat">
+                    <option value="mp4" selected>MP4 (H.264 - Universal)</option>
+                    <option value="webm">WebM (VP8 - Web Friendly)</option>
+                    <option value="mkv">MKV (Matroska)</option>
+                    <option value="avi">AVI</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="resolution">Target Resolution</label>
+                <select id="resolution">
+                    <option value="original">Original Size</option>
+                    <option value="1080">1080p (Max height)</option>
+                    <option value="720" selected>720p (Max height)</option>
+                    <option value="480">480p (Max height)</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="quality">Compression Level</label>
+                <select id="quality">
+                    <option value="22">High Quality (Slight Compression)</option>
+                    <option value="28" selected>Balanced (Recommended)</option>
+                    <option value="34">Small File Size (Higher Compression)</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="audioOpt">Audio Stream</label>
+                <select id="audioOpt">
+                    <option value="keep" selected>Keep Audio</option>
+                    <option value="mute">Mute / Remove Audio</option>
+                </select>
+            </div>
+        </div>
+
+        <button class="btn" id="startBtn" disabled>Optimize Video</button>
+
+        <!-- Progress Bar -->
+        <div class="progress-section" id="progressSection">
+            <div class="progress-header">
+                <span id="statusText">Loading WebAssembly engine...</span>
+                <span id="progressPercent">0%</span>
+            </div>
+            <div class="progress-bar-bg">
+                <div class="progress-bar-fill" id="progressBar"></div>
+            </div>
+        </div>
+
+        <!-- Output Section -->
+        <div class="output-section" id="outputSection">
+            <h3>Optimization Finished!</h3>
+            <video id="videoPreview" controls></video>
+            <br>
+            <a id="downloadBtn" class="download-btn" href="#" download>Download Video</a>
+            <div class="size-comparison" id="sizeComparison"></div>
+        </div>
+
+        <div class="note">
+            Processing is performed strictly inside your browser using WebAssembly.<br>
+            Internet access is only needed the first time to fetch the FFmpeg engine script.
+        </div>
+    </div>
+
+    <script>
+        const { createFFmpeg, fetchFile } = FFmpeg;
+        let ffmpeg = null;
+        let selectedFile = null;
+
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const fileInfo = document.getElementById('fileInfo');
+        const startBtn = document.getElementById('startBtn');
+        const progressSection = document.getElementById('progressSection');
+        const statusText = document.getElementById('statusText');
+        const progressPercent = document.getElementById('progressPercent');
+        const progressBar = document.getElementById('progressBar');
+        const outputSection = document.getElementById('outputSection');
+        const videoPreview = document.getElementById('videoPreview');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const sizeComparison = document.getElementById('sizeComparison');
+
+        // Drag & Drop handlers
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) handleFileSelect(e.dataTransfer.files[0]);
+        });
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) handleFileSelect(e.target.files[0]);
+        });
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        function handleFileSelect(file) {
+            selectedFile = file;
+            fileInfo.textContent = `Selected: ${file.name} (${formatBytes(file.size)})`;
+            fileInfo.style.display = 'block';
+            startBtn.disabled = false;
+            outputSection.style.display = 'none';
+        }
+
+        startBtn.addEventListener('click', async () => {
+            if (!selectedFile) return;
+
+            startBtn.disabled = true;
+            progressSection.style.display = 'block';
+            outputSection.style.display = 'none';
+            progressBar.style.width = '0%';
+            progressPercent.textContent = '0%';
+            statusText.textContent = 'Initializing engine...';
+
+            try {
+                if (!ffmpeg) {
+                    ffmpeg = createFFmpeg({
+                        log: false,
+                        corePath: 'https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js'
+                    });
+                }
+
+                if (!ffmpeg.isLoaded()) {
+                    await ffmpeg.load();
+                }
+
+                ffmpeg.setProgress(({ ratio }) => {
+                    const pct = Math.min(100, Math.max(0, Math.round(ratio * 100)));
+                    progressBar.style.width = `${pct}%`;
+                    progressPercent.textContent = `${pct}%`;
+                    statusText.textContent = `Processing video... (${pct}%)`;
+                });
+
+                statusText.textContent = 'Loading video into memory...';
+                const inputExt = selectedFile.name.split('.').pop().toLowerCase();
+                const inputName = `input.${inputExt}`;
+                const outFormat = document.getElementById('outFormat').value;
+                const outputName = `output.${outFormat}`;
+
+                ffmpeg.FS('writeFile', inputName, await fetchFile(selectedFile));
+
+                // Read User Options
+                const resOption = document.getElementById('resolution').value;
+                const qualityOption = document.getElementById('quality').value;
+                const audioOption = document.getElementById('audioOpt').value;
+
+                let args = ['-i', inputName];
+
+                // Scale filter
+                if (resOption !== 'original') {
+                    args.push('-vf', `scale=-2:${resOption}`);
+                }
+
+                // Codec and Quality (CRF) settings
+                if (outFormat === 'mp4' || outFormat === 'mkv') {
+                    args.push('-c:v', 'libx264', '-crf', qualityOption, '-preset', 'ultrafast');
+                } else if (outFormat === 'webm') {
+                    args.push('-c:v', 'libvpx', '-crf', qualityOption, '-b:v', '1M');
+                } else if (outFormat === 'avi') {
+                    args.push('-c:v', 'mpeg4', '-qscale:v', '5');
+                }
+
+                // Audio configuration
+                if (audioOption === 'mute') {
+                    args.push('-an');
+                } else {
+                    if (outFormat === 'mp4' || outFormat === 'mkv') {
+                        args.push('-c:a', 'aac', '-b:a', '128k');
+                    } else if (outFormat === 'webm') {
+                        args.push('-c:a', 'libvorbis');
+                    }
+                }
+
+                args.push(outputName);
+
+                statusText.textContent = 'Optimizing video...';
+                await ffmpeg.run(...args);
+
+                statusText.textContent = 'Exporting result...';
+                const data = ffmpeg.FS('readFile', outputName);
+
+                const mimeTypes = {
+                    mp4: 'video/mp4',
+                    webm: 'video/webm',
+                    mkv: 'video/x-matroska',
+                    avi: 'video/x-msvideo'
+                };
+
+                const blob = new Blob([data.buffer], { type: mimeTypes[outFormat] || 'video/mp4' });
+                const url = URL.createObjectURL(blob);
+
+                // Setup output preview and download link
+                videoPreview.src = url;
+                downloadBtn.href = url;
+                const baseName = selectedFile.name.substring(0, selectedFile.name.lastIndexOf('.'));
+                downloadBtn.download = `${baseName}_optimized.${outFormat}`;
+
+                const savings = (((selectedFile.size - blob.size) / selectedFile.size) * 100).toFixed(1);
+                sizeComparison.innerHTML = `
+                    Original Size: <strong>${formatBytes(selectedFile.size)}</strong> | 
+                    Optimized Size: <strong>${formatBytes(blob.size)}</strong>
+                    <br>Net Change: <strong style="color: var(--accent);">${savings > 0 ? '-' + savings + '% reduced' : '+' + Math.abs(savings) + '% size'}</strong>
+                `;
+
+                outputSection.style.display = 'block';
+                statusText.textContent = 'Done!';
+                progressBar.style.width = '100%';
+                progressPercent.textContent = '100%';
+
+                // Cleanup memory
+                try {
+                    ffmpeg.FS('unlink', inputName);
+                    ffmpeg.FS('unlink', outputName);
+                } catch (e) {}
+
+            } catch (err) {
+                console.error(err);
+                alert('An error occurred during video processing.\n\nNote: If opening directly via double-click fails due to browser file:// restrictions, serve the file with a local server (e.g. "python -m http.server 8000").');
+                statusText.textContent = 'Processing failed.';
+            } finally {
+                startBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>
