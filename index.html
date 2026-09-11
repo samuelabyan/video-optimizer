@@ -4,8 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Local Video Optimizer</title>
-    <!-- FFmpeg.wasm Single-Threaded Library for Client-Side Processing -->
-    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
+    
+    <!-- Service worker to enable Cross-Origin Isolation on GitHub Pages -->
+    <script src="https://cdn.jsdelivr.net/gh/gzuidhof/coi-serviceworker@0.1.7/coi-serviceworker.min.js"></script>
+
+    <!-- FFmpeg.wasm v0.12 UMD Modules -->
+    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
+    <script src="https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
+
     <style>
         :root {
             --bg-color: #0f172a;
@@ -57,7 +63,7 @@
 <body>
     <div class="container">
         <h1>Local Video Optimizer</h1>
-        <p class="subtitle">Client-Side Compression & Conversion (100% Offline Capable)</p>
+        <p class="subtitle">Client-Side Compression & Conversion (Runs in Browser)</p>
 
         <!-- Drop Zone -->
         <div class="drop-zone" id="dropZone">
@@ -67,7 +73,7 @@
         </div>
         <div class="file-info" id="fileInfo"></div>
 
-        <!-- Optimization Controls -->
+        <!-- Settings -->
         <div class="options-grid">
             <div class="form-group">
                 <label for="outFormat">Export Format</label>
@@ -112,7 +118,7 @@
         <!-- Progress Bar -->
         <div class="progress-section" id="progressSection">
             <div class="progress-header">
-                <span id="statusText">Loading WebAssembly engine...</span>
+                <span id="statusText">Ready</span>
                 <span id="progressPercent">0%</span>
             </div>
             <div class="progress-bar-bg">
@@ -130,13 +136,14 @@
         </div>
 
         <div class="note">
-            Processing is performed strictly inside your browser using WebAssembly.<br>
-            Internet access is only needed the first time to fetch the FFmpeg engine script.
+            Runs 100% locally in your browser via WebAssembly.<br> No videos leave your device.
         </div>
     </div>
 
     <script>
-        const { createFFmpeg, fetchFile } = FFmpeg;
+        const { FFmpeg } = FFmpegWasm;
+        const { fetchFile, toBlobURL } = FFmpegUtil;
+
         let ffmpeg = null;
         let selectedFile = null;
 
@@ -153,7 +160,6 @@
         const downloadBtn = document.getElementById('downloadBtn');
         const sizeComparison = document.getElementById('sizeComparison');
 
-        // Drag & Drop handlers
         dropZone.addEventListener('click', () => fileInput.click());
         dropZone.addEventListener('dragover', (e) => {
             e.preventDefault();
@@ -193,26 +199,29 @@
             outputSection.style.display = 'none';
             progressBar.style.width = '0%';
             progressPercent.textContent = '0%';
-            statusText.textContent = 'Initializing engine...';
 
             try {
                 if (!ffmpeg) {
-                    ffmpeg = createFFmpeg({
-                        log: false,
-                        corePath: 'https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js'
+                    ffmpeg = new FFmpeg();
+
+                    ffmpeg.on('progress', ({ progress }) => {
+                        const pct = Math.min(100, Math.max(0, Math.round(progress * 100)));
+                        progressBar.style.width = `${pct}%`;
+                        progressPercent.textContent = `${pct}%`;
+                        statusText.textContent = `Processing video... (${pct}%)`;
                     });
                 }
 
-                if (!ffmpeg.isLoaded()) {
-                    await ffmpeg.load();
+                if (!ffmpeg.loaded) {
+                    statusText.textContent = 'Downloading WebAssembly engine (~30MB, once)...';
+                    const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+                    
+                    // Convert CDN dependencies into local Blob URLs to satisfy browser cross-origin policy
+                    await ffmpeg.load({
+                        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+                        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+                    });
                 }
-
-                ffmpeg.setProgress(({ ratio }) => {
-                    const pct = Math.min(100, Math.max(0, Math.round(ratio * 100)));
-                    progressBar.style.width = `${pct}%`;
-                    progressPercent.textContent = `${pct}%`;
-                    statusText.textContent = `Processing video... (${pct}%)`;
-                });
 
                 statusText.textContent = 'Loading video into memory...';
                 const inputExt = selectedFile.name.split('.').pop().toLowerCase();
@@ -220,21 +229,18 @@
                 const outFormat = document.getElementById('outFormat').value;
                 const outputName = `output.${outFormat}`;
 
-                ffmpeg.FS('writeFile', inputName, await fetchFile(selectedFile));
+                await ffmpeg.writeFile(inputName, await fetchFile(selectedFile));
 
-                // Read User Options
                 const resOption = document.getElementById('resolution').value;
                 const qualityOption = document.getElementById('quality').value;
                 const audioOption = document.getElementById('audioOpt').value;
 
                 let args = ['-i', inputName];
 
-                // Scale filter
                 if (resOption !== 'original') {
                     args.push('-vf', `scale=-2:${resOption}`);
                 }
 
-                // Codec and Quality (CRF) settings
                 if (outFormat === 'mp4' || outFormat === 'mkv') {
                     args.push('-c:v', 'libx264', '-crf', qualityOption, '-preset', 'ultrafast');
                 } else if (outFormat === 'webm') {
@@ -243,7 +249,6 @@
                     args.push('-c:v', 'mpeg4', '-qscale:v', '5');
                 }
 
-                // Audio configuration
                 if (audioOption === 'mute') {
                     args.push('-an');
                 } else {
@@ -257,10 +262,10 @@
                 args.push(outputName);
 
                 statusText.textContent = 'Optimizing video...';
-                await ffmpeg.run(...args);
+                await ffmpeg.exec(args);
 
-                statusText.textContent = 'Exporting result...';
-                const data = ffmpeg.FS('readFile', outputName);
+                statusText.textContent = 'Preparing download...';
+                const data = await ffmpeg.readFile(outputName);
 
                 const mimeTypes = {
                     mp4: 'video/mp4',
@@ -272,7 +277,6 @@
                 const blob = new Blob([data.buffer], { type: mimeTypes[outFormat] || 'video/mp4' });
                 const url = URL.createObjectURL(blob);
 
-                // Setup output preview and download link
                 videoPreview.src = url;
                 downloadBtn.href = url;
                 const baseName = selectedFile.name.substring(0, selectedFile.name.lastIndexOf('.'));
@@ -290,15 +294,12 @@
                 progressBar.style.width = '100%';
                 progressPercent.textContent = '100%';
 
-                // Cleanup memory
-                try {
-                    ffmpeg.FS('unlink', inputName);
-                    ffmpeg.FS('unlink', outputName);
-                } catch (e) {}
+                await ffmpeg.deleteFile(inputName);
+                await ffmpeg.deleteFile(outputName);
 
             } catch (err) {
                 console.error(err);
-                alert('An error occurred during video processing.\n\nNote: If opening directly via double-click fails due to browser file:// restrictions, serve the file with a local server (e.g. "python -m http.server 8000").');
+                alert('Processing error: ' + err.message);
                 statusText.textContent = 'Processing failed.';
             } finally {
                 startBtn.disabled = false;
